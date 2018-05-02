@@ -1,102 +1,120 @@
 package com.axonactive.listener;
 
-import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
-
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Listener {
-
 	public static ArrayList<String> pendingFiles;
-	private static String CEO_PATH_FILE = "\\\\hcmc-fsr\\Teams\\JuniorClass\\Legion\\ScanFile\\CEO";
-	private static String CIO_PATH_FILE = "\\\\hcmc-fsr\\Teams\\JuniorClass\\Legion\\ScanFile\\CIO";
-	private static String CTO_PATH_FILE = "\\\\hcmc-fsr\\Teams\\JuniorClass\\Legion\\ScanFile\\CTO";
+	private final WatchService watchService;
+	private final Map<WatchKey, Path> keys;
+	private static final String SCAN_FILE_PATH = "\\\\hcmc-fsr\\Teams\\JuniorClass\\Legion\\ScanFile\\";
 
-	public static void watchMyFolder() {
-		Path ceoDir = new File(CEO_PATH_FILE).toPath();
-		Path cioDir = new File(CIO_PATH_FILE).toPath();
-		Path ctoDir = new File(CTO_PATH_FILE).toPath();
-		System.out.println("Listening...");
+	public Listener() throws IOException {
+		this.watchService = FileSystems.getDefault().newWatchService();
+		this.keys = new HashMap<WatchKey, Path>();
+		Path directory = Paths.get(SCAN_FILE_PATH);
+		registerDirectoryAndSubDirectory(directory);
+	}
+
+	private void registerDirectory(Path path) throws IOException {
+		WatchKey watchKey = path.register(watchService, StandardWatchEventKinds.ENTRY_CREATE);
+		keys.put(watchKey, path);
+	}
+
+	private void registerDirectoryAndSubDirectory(final Path startPath) throws IOException {
+		Files.walkFileTree(startPath, new SimpleFileVisitor<Path>() {
+			@Override
+			public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) throws IOException {
+				registerDirectory(directory);
+				return FileVisitResult.CONTINUE;
+			}
+		});
+	}
+
+	/**
+	 * Process all events for keys queued to the watchService
+	 * 
+	 * @return
+	 * @throws InterruptedException
+	 */
+	public void processEvents() throws InterruptedException {
 		pendingFiles = new ArrayList<>();
 		String fileName = "";
 
-		try {
-			if (!isFolder(ceoDir)) {
-				throw new IllegalArgumentException("Path: " + ceoDir + " is not a folder");
+		System.out.println("Listening...");
+		while (true) {
+			WatchKey watchKey;
+			try {
+				watchKey = this.watchService.take();
+			} catch (InterruptedException e) {
+				System.out.println("Interrupted Watch Service");
+				return;
 			}
 
-			if (!isFolder(cioDir)) {
-				throw new IllegalArgumentException("Path: " + cioDir + " is not a folder");
+			Path dir = keys.get(watchKey);
+
+			if (dir == null) {
+				System.out.println("Null WatchKey");
+				continue;
 			}
 
-			if (!isFolder(ctoDir)) {
-				throw new IllegalArgumentException("Path: " + ctoDir + " is not a folder");
-			}
+			Thread.sleep(50);
 
-		} catch (IOException ioe) {
-			ioe.printStackTrace();
-		}
+			for (WatchEvent<?> event : watchKey.pollEvents()) {
+				@SuppressWarnings("rawtypes")
+				WatchEvent.Kind kind = event.kind();
 
-		// System.out.println("Watching path: " + myDir);
+				@SuppressWarnings("unchecked")
+				Path name = ((WatchEvent<Path>) event).context();
+				Path child = dir.resolve(name);
 
-		try {
-			WatchService watcher = FileSystems.getDefault().newWatchService();
-			ceoDir.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
-			cioDir.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
-			ctoDir.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
+				fileName = child.toString();
+				if (!isElementExists(fileName)) {
+					pendingFiles.add(fileName);
+				}
 
-			while (true) {
-
-				WatchKey watckKey = watcher.take();
-				Thread.sleep(50);
-				List<WatchEvent<?>> events = watckKey.pollEvents();
-
-				for (WatchEvent event : events) {
-					if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE) {
-						// System.out.println("Created: " + event.context().toString());
-						fileName = event.context().toString();
-						if (!isElementExists(fileName)) {
-							pendingFiles.add(fileName);
-							System.out.println(pendingFiles.get(pendingFiles.size() - 1));
+				if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+					try {
+						if (Files.isDirectory(child)) {
+							registerDirectoryAndSubDirectory(child);
 						}
-
+					} catch (IOException x) {
+						System.out.println("Create error");
 					}
 				}
-				events.clear();
-				watckKey.reset();
 			}
-		} catch (Exception e) {
-			System.out.println("Error: " + e.toString());
+
+			boolean valid = watchKey.reset();
+			if (!valid) {
+				keys.remove(watchKey);
+
+				// all directories are inaccessible
+				if (keys.isEmpty()) {
+					break;
+				}
+			}
 		}
-
-	}
-
-	private static boolean isFolder(Path directory) throws IOException {
-		return (Boolean) Files.getAttribute(directory, "basic:isDirectory", NOFOLLOW_LINKS);
 	}
 
 	private static boolean isElementExists(String fileName) {
 		if (pendingFiles != null) {
 			if (pendingFiles.contains(fileName)) {
-				// System.out.println("last index: " +pendingFiles.get(pendingFiles.size()-1));
-				// System.out.println("check file name: " +fileName);
-
 				return true;
 			}
 		}
 		return false;
-	}
-
-	public static void main(String[] args) {
-		watchMyFolder();
 	}
 }
